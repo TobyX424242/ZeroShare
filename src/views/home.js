@@ -197,8 +197,8 @@ export const html = `<!DOCTYPE html>
                         <input type="number" id="expires-in" value="1" min="1" max="{{MAX_RETENTION_HOURS}}" oninput="validateExpiration(this)">
                     </div>
                     <div>
-                        <label style="font-size: 0.8rem; margin-bottom: 0.2rem;">Max Views (0 = Unlimited)</label>
-                        <input type="number" id="max-views" placeholder="Unlimited" min="0">
+                        <label style="font-size: 0.8rem; margin-bottom: 0.2rem;">Max Views (0 = Unlimited, max {{MAX_VIEWS_LIMIT}})</label>
+                        <input type="number" id="max-views" placeholder="Unlimited" min="0" max="{{MAX_VIEWS_LIMIT}}" oninput="validateMaxViews(this)">
                     </div>
                 </div>
             </div>
@@ -260,7 +260,8 @@ export const html = `<!DOCTYPE html>
         // --- Config ---
         const CONFIG = {
             maxFileSize: {{MAX_FILE_SIZE}},
-            maxRetentionHours: {{MAX_RETENTION_HOURS}}
+            maxRetentionHours: {{MAX_RETENTION_HOURS}},
+            maxViewsLimit: {{MAX_VIEWS_LIMIT}}
         };
 
         // --- Toast Utils ---
@@ -348,10 +349,59 @@ export const html = `<!DOCTYPE html>
         let decryptedMeta = null;
 
         function validateExpiration(input) {
-            if (parseInt(input.value) > CONFIG.maxRetentionHours) {
+            if (input.value === '') {
+                return;
+            }
+
+            const value = Number(input.value);
+
+            if (!Number.isFinite(value)) {
+                input.value = 1;
+                showToast("Expiration must be a valid number", "error");
+                return;
+            }
+
+            if (value < 1) {
+                input.value = 1;
+                showToast("Expiration must be at least 1 hour", "error");
+                return;
+            }
+
+            if (value > CONFIG.maxRetentionHours) {
                 input.value = CONFIG.maxRetentionHours;
                 showToast("Expiration time cannot exceed " + CONFIG.maxRetentionHours + " hours", "error");
+                return;
             }
+
+            input.value = Math.floor(value);
+        }
+
+        function validateMaxViews(input) {
+            if (input.value === '') {
+                return;
+            }
+
+            const value = Number(input.value);
+
+            if (!Number.isFinite(value)) {
+                input.value = '';
+                showToast("Max views must be a valid number", "error");
+                return;
+            }
+
+            if (value < 0) {
+                input.value = '';
+                showToast("Max views cannot be negative", "error");
+                return;
+            }
+
+            if (value > CONFIG.maxViewsLimit) {
+                input.value = CONFIG.maxViewsLimit;
+                showToast("Max views cannot exceed " + CONFIG.maxViewsLimit, "error");
+                return;
+            }
+
+            input.value = Math.floor(value);
         }
 
         function generatePassword() {
@@ -502,19 +552,39 @@ export const html = `<!DOCTYPE html>
                 progressText.innerText = '0%';
 
                 const password = document.getElementById('upload-password').value;
-                
-                let maxViewsInput = document.getElementById('max-views').value;
-                let maxViews = -1;
-                if (maxViewsInput && parseInt(maxViewsInput) > 0) {
-                    maxViews = parseInt(maxViewsInput);
-                }
 
-                let expiresInInput = document.getElementById('expires-in').value;
-                let expiresIn = 1;
-                if (expiresInInput) {
-                    const val = parseInt(expiresInInput);
-                    if (val > CONFIG.maxRetentionHours) throw new Error("Expiration time cannot exceed " + CONFIG.maxRetentionHours + " hours");
-                    if (val > 0) expiresIn = val;
+                const expiresInField = document.getElementById('expires-in');
+                const expiresValue = Number(expiresInField.value);
+                if (!Number.isFinite(expiresValue)) {
+                    throw new Error("Expiration must be a valid number");
+                }
+                if (expiresValue <= 0) {
+                    throw new Error("Expiration must be at least 1 hour");
+                }
+                if (expiresValue > CONFIG.maxRetentionHours) {
+                    throw new Error("Expiration time cannot exceed " + CONFIG.maxRetentionHours + " hours");
+                }
+                const expiresIn = Math.floor(expiresValue);
+
+                const maxViewsField = document.getElementById('max-views');
+                let maxViews = -1;
+                const rawMaxViews = (maxViewsField.value || '').trim();
+                if (rawMaxViews !== '') {
+                    const parsedMaxViews = Number(rawMaxViews);
+                    if (!Number.isFinite(parsedMaxViews)) {
+                        throw new Error("Max views must be a valid number");
+                    }
+                    if (parsedMaxViews < 0) {
+                        throw new Error("Max views cannot be negative");
+                    }
+                    if (parsedMaxViews > CONFIG.maxViewsLimit) {
+                        throw new Error("Max views cannot exceed " + CONFIG.maxViewsLimit);
+                    }
+                    if (parsedMaxViews === 0) {
+                        maxViews = -1;
+                    } else {
+                        maxViews = Math.floor(parsedMaxViews);
+                    }
                 }
 
                 const accessControl = {

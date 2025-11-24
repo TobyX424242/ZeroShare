@@ -17,6 +17,12 @@ preview_id = "xxxxxxxxxxxxxxxxxxx"
 [vars]
 MAX_FILE_SIZE = 104857600  # 100MB
 MAX_RETENTION_HOURS = 24
+MAX_VIEWS_LIMIT = 50       # Maximum allowed views before forced deletion
+
+# Cron trigger that runs the scheduled cleanup worker.
+# Adjust the frequency as needed (example below runs every 30 minutes).
+[triggers]
+crons = ["*/30 * * * *"]
 
 # Static Assets (Optional, if we want to serve static files from a directory)
 # [site]

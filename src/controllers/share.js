@@ -1,10 +1,15 @@
 import { jsonResponse } from '../utils/response.js';
 import { verifyPassword } from '../utils/crypto.js';
-import { arrayBufferToBase64 } from '../utils/encoding.js';
 import { StorageService } from '../services/storage.js';
+
+const SHARE_ID_PATTERN = /^[a-f0-9]{32}$/i;
 
 export async function handleDownload(request, env, shareId) {
   try {
+    if (!SHARE_ID_PATTERN.test(shareId || '')) {
+      return jsonResponse({ error: 'Invalid share identifier' }, 400);
+    }
+
     const storage = new StorageService(env);
     
     // 1. Get access control from KV
@@ -25,13 +30,16 @@ export async function handleDownload(request, env, shareId) {
 
     const url = new URL(request.url);
 
+    const sanitizedAccessSettings = sanitizeStoredAccessControl(accessControl.accessControl);
+    accessControl.accessControl = sanitizedAccessSettings;
+
     // Check mode (metadata only)
     if (url.searchParams.get('check') === 'true') {
       return jsonResponse({
         exists: true,
         passwordRequired: !!accessControl.passwordHash,
         expiresAt: new Date(accessControl.expiresAt).toISOString(),
-        viewsRemaining: accessControl.accessControl.maxViews === -1 ? -1 : (accessControl.accessControl.maxViews - accessControl.accessControl.currentViews)
+        viewsRemaining: calculateViewsRemaining(accessControl.accessControl)
       });
     }
     
@@ -101,19 +109,53 @@ export async function handleDownload(request, env, shareId) {
     }
     
     // 8. Return stream
+    const objectMetadata = r2Object.customMetadata || {};
+
     return new Response(r2Object.body, {
-        headers: {
-            'Content-Type': 'application/octet-stream',
-            'X-Encrypted-Metadata': r2Object.customMetadata.encryptedMetadata,
-            'X-Original-Content-Type': r2Object.customMetadata.contentType || 'application/octet-stream',
-            'X-Is-Last-View': shouldDelete ? 'true' : 'false',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Expose-Headers': 'X-Encrypted-Metadata, X-Original-Content-Type, X-Is-Last-View'
-        }
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Encrypted-Metadata': objectMetadata.encryptedMetadata || '',
+        'X-Original-Content-Type': objectMetadata.contentType || 'application/octet-stream',
+        'X-Is-Last-View': shouldDelete ? 'true' : 'false',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'X-Encrypted-Metadata, X-Original-Content-Type, X-Is-Last-View'
+      }
     });
     
   } catch (error) {
     console.error('Download error:', error);
     return jsonResponse({ error: 'Download failed' }, 500);
   }
+}
+
+function sanitizeStoredAccessControl(accessControl = {}) {
+  const rawMaxViews = accessControl.maxViews;
+  let maxViews = -1;
+  if (rawMaxViews === -1) {
+    maxViews = -1;
+  } else {
+    const numericMax = Number(rawMaxViews);
+    if (Number.isFinite(numericMax) && numericMax > 0) {
+      maxViews = numericMax;
+    }
+  }
+
+  const currentViewsNumeric = Number(accessControl.currentViews);
+  const currentViews = Number.isFinite(currentViewsNumeric) && currentViewsNumeric > 0
+    ? currentViewsNumeric
+    : 0;
+
+  return {
+    maxViews,
+    currentViews,
+    burnAfterRead: Boolean(accessControl.burnAfterRead)
+  };
+}
+
+function calculateViewsRemaining(accessControl) {
+  if (accessControl.maxViews === -1) {
+    return -1;
+  }
+
+  return Math.max(0, accessControl.maxViews - accessControl.currentViews);
 }
