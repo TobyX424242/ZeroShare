@@ -117,6 +117,8 @@ export const html = `<!DOCTYPE html>
         }
         #preview-content { margin-top: 1rem; max-height: 300px; overflow: auto; }
         #preview-content img { max-width: 100%; border-radius: 4px; }
+        #preview-content video { max-width: 100%; border-radius: 4px; }
+        #preview-content audio { width: 100%; }
         
         /* Toast Notifications */
         #toast-container {
@@ -254,7 +256,6 @@ export const html = `<!DOCTYPE html>
 
     <div id="toast-container"></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script>
         // --- Config ---
@@ -792,15 +793,24 @@ export const html = `<!DOCTYPE html>
                 progressContainer.classList.add('hidden');
 
                 const previewDiv = document.getElementById('preview-content');
-                
-                if (metadata.type === 'text') {
-                    const text = new TextDecoder().decode(decDataBuf);
-                    previewDiv.innerHTML = marked.parse(text);
-                } else if (metadata.mimeType.startsWith('image/')) {
+
+                // Determine preview type: image, video, audio, text
+                const mime = (metadata.mimeType || '').toLowerCase();
+
+                if (mime.startsWith('image/')) {
                     const url = URL.createObjectURL(decryptedBlob);
                     previewDiv.innerHTML = \`<img src="\${url}" alt="Preview">\`;
+                } else if (mime.startsWith('video/')) {
+                    const url = URL.createObjectURL(decryptedBlob);
+                    previewDiv.innerHTML = \`<video controls src="\${url}">Your browser does not support the video element.</video>\`;
+                } else if (mime.startsWith('audio/')) {
+                    const url = URL.createObjectURL(decryptedBlob);
+                    previewDiv.innerHTML = \`<audio controls src="\${url}">Your browser does not support the audio element.</audio>\`;
+                } else if (metadata.type === 'text' || mime.startsWith('text/')) {
+                    const text = new TextDecoder().decode(decDataBuf);
+                    previewDiv.innerHTML = \`<pre style="white-space: pre-wrap;">\${text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>\`;
                 } else {
-                    previewDiv.innerText = \`File: \${metadata.filename} (\${(metadata.size/1024).toFixed(1)} KB)\nPreview not available for this file type.\`;
+                    previewDiv.innerText = \`File: \${metadata.filename} (\${(metadata.size/1024).toFixed(1)} KB)\\nPreview not available for this file type.\`;
                 }
 
                 if (res.headers.get('X-Is-Last-View') === 'true') {
