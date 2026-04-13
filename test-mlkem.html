@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test ML-KEM</title>
+</head>
+<body>
+    <h1>Testing ML-KEM</h1>
+    <script type="module">
+        import { createMlKem768 } from 'https://esm.sh/mlkem';
+
+        async function runTest() {
+            try {
+                const kem = await createMlKem768();
+                console.log("KEM methods:", Object.keys(kem.__proto__));
+
+                // 1. Generate Key Pair
+                const keys = kem.generateKeyPair();
+                const pk = keys[0];
+                const sk = keys[1];
+
+                console.log("Keys shape:", {
+                    pk: { type: pk.constructor.name, byteLength: pk.byteLength },
+                    sk: { type: sk.constructor.name, byteLength: sk.byteLength }
+                });
+
+                // 2. Encap
+                const [ct, ssEncap] = kem.encap(pk);
+                console.log("Encap shape:", {
+                    ct: { type: ct.constructor.name, byteLength: ct.byteLength },
+                    ssEncap: { type: ssEncap.constructor.name, byteLength: ssEncap.byteLength }
+                });
+
+                // 3. Decap
+                const ssDecap = kem.decap(ct, sk);
+                console.log("Decap matches encap SS?", ssEncap.every((v, i) => v === ssDecap[i]));
+
+            } catch (err) {
+                console.error("Error during ML-KEM test:", err);
+            }
+        }
+        runTest();
+    </script>
+</body>
+</html>

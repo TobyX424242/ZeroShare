@@ -158,8 +158,19 @@ export const html = `<!DOCTYPE html>
 </head>
 <body>
     <div class="container">
-        <h1>ZeroShare</h1>
+        <h1 style="display: flex; align-items: center; justify-content: center; gap: 10px;">
+            ZeroShare
+            <span id="pq-badge" class="hidden" style="font-size: 0.6em; background: rgba(34, 197, 94, 0.15); color: #4ade80; padding: 2px 8px; border-radius: 12px; border: 1px solid rgba(34, 197, 94, 0.3); letter-spacing: 0; font-weight: normal;">🔒 PQ Mode Active</span>
+        </h1>
         
+        <div style="text-align: center; margin-bottom: 1rem;">
+            <button onclick="setupPqReceiver()" class="btn-secondary" style="font-size: 0.8rem; padding: 0.4rem 0.8rem; background: var(--bg); border: 1px solid var(--primary); color: var(--primary);">Setup Post-Quantum Receiver Link</button>
+        </div>
+        <div id="pq-info-box" class="hidden result-box" style="margin-bottom: 1rem; font-size: 0.8rem; word-break: break-all; background: var(--bg);">
+            <p style="margin: 0 0 0.5rem 0;">Share this link to receive Post-Quantum encrypted files. Your private key is stored in your browser.</p>
+            <div id="pq-receive-link" style="color: var(--primary); font-weight: bold; user-select: all;"></div>
+        </div>
+
         <!-- Upload Section -->
         <div id="upload-section">
             <div class="tabs">
@@ -279,6 +290,28 @@ export const html = `<!DOCTYPE html>
         }
 
         // --- Crypto Utils ---
+        async function loadMlKem() {
+            if (window.mlkemCache) return window.mlkemCache;
+            const module = await import('https://esm.sh/mlkem');
+            window.mlkemCache = await module.createMlKem768();
+            return window.mlkemCache;
+        }
+
+        async function setupPqReceiver() {
+            try {
+                showToast("Generating PQ keys... this may take a moment", "info");
+                const kem = await loadMlKem();
+                const [pk, sk] = kem.generateKeyPair();
+                localStorage.setItem('pq_sk', arrayBufferToBase64(sk));
+                const receiveUrl = \`\${window.location.origin}/#pq-receive:\` + arrayBufferToBase64(pk);
+                document.getElementById('pq-info-box').classList.remove('hidden');
+                document.getElementById('pq-receive-link').innerText = receiveUrl;
+                showToast("Receiver Link Generated!", "success");
+            } catch(e) {
+                showToast("Failed to generate keys: " + e.message, "error");
+            }
+        }
+
         async function generateEncryptionKey() {
             return await crypto.subtle.generateKey(
                 { name: "AES-GCM", length: 256 },
@@ -430,6 +463,12 @@ export const html = `<!DOCTYPE html>
         // Init
         window.onload = async () => {
             const path = window.location.pathname;
+            if (path === '/' && window.location.hash.startsWith('#pq-receive:')) {
+                // PQ Encrypt mode
+                document.getElementById('pq-badge').classList.remove('hidden');
+                document.getElementById('upload-btn').innerText = 'PQ Encrypt & Share';
+                showToast("PQ Receiver Mode Active - Uploaded data will be PQ-Encrypted.", "success");
+            }
             if (path.startsWith('/share/')) {
                 document.getElementById('upload-section').classList.add('hidden');
                 document.getElementById('download-section').classList.remove('hidden');
@@ -439,6 +478,18 @@ export const html = `<!DOCTYPE html>
                     document.getElementById('download-status').innerText = "Error: Missing decryption key in URL.";
                     document.getElementById('download-btn').disabled = true;
                     return;
+                }
+                
+                if (window.location.hash.startsWith('#pq:')) {
+                    document.getElementById('pq-badge').classList.remove('hidden');
+                    document.getElementById('pq-badge').innerText = '🔒 PQ Decryption Active';
+                    
+                    if (!localStorage.getItem('pq_sk')) {
+                        document.getElementById('download-status').innerHTML = "<span style='color: var(--error);'>Error: Post-Quantum Secret Key missing. This browser didn't generate the receiver link.</span>";
+                        document.getElementById('download-btn').disabled = true;
+                        return;
+                    }
+                    showToast('Post-Quantum encryption detected. Decrypting with local secure key...', 'info');
                 }
 
                 // Auto-detect password requirement
@@ -536,8 +587,23 @@ export const html = `<!DOCTYPE html>
                 }
 
                 // 2. Encrypt
-                const key = await generateEncryptionKey();
-                const keyBase64 = await exportKeyToBase64(key);
+                let key, keyBase64, pqHash = null;
+                const pathHash = window.location.hash;
+                if (pathHash.startsWith('#pq-receive:')) {
+                    const kem = await loadMlKem();
+                    const pkBase64 = pathHash.split(':')[1];
+                    const pk = new Uint8Array(base64ToArrayBuffer(pkBase64));
+                    const [ct, ss] = kem.encap(pk);
+                    pqHash = 'pq:' + arrayBufferToBase64(ct);
+                    key = await crypto.subtle.importKey(
+                        "raw", ss,
+                        { name: "AES-GCM", length: 256 },
+                        true, ["encrypt", "decrypt"]
+                    );
+                } else {
+                    key = await generateEncryptionKey();
+                    keyBase64 = await exportKeyToBase64(key);
+                }
 
                 const { ciphertext, iv } = await encryptData(key, dataToEncrypt);
                 const combinedData = combineIvAndCiphertext(iv, ciphertext);
@@ -636,20 +702,31 @@ export const html = `<!DOCTYPE html>
                 });
 
                 // 4. Show Result
-                const shareUrl = \`\${window.location.origin}/share/\${result.shareId}#\${keyBase64}\`;
+                const finalHash = pqHash ? pqHash : keyBase64;
+                const shareUrl = \`\${window.location.origin}/share/\${result.shareId}#\${finalHash}\`;
                 document.getElementById('share-link').innerText = shareUrl;
                 document.getElementById('share-result').classList.remove('hidden');
                 
                 // Generate QR Code
                 document.getElementById('qrcode').innerHTML = '';
-                new QRCode(document.getElementById("qrcode"), {
-                    text: shareUrl,
-                    width: 128,
-                    height: 128,
-                    colorDark : "#000000",
-                    colorLight : "#ffffff",
-                    correctLevel : QRCode.CorrectLevel.H
-                });
+                try {
+                    // For Post-Quantum URLs, skip QR because ~1500 chars 
+                    // breaks max capacity for Error Correction H and displays too densely.
+                    if (!pqHash) {
+                        new QRCode(document.getElementById("qrcode"), {
+                            text: shareUrl,
+                            width: 128,
+                            height: 128,
+                            colorDark : "#000000",
+                            colorLight : "#ffffff",
+                            correctLevel : QRCode.CorrectLevel.H
+                        });
+                    } else {
+                        document.getElementById('qrcode').innerHTML = '<span style="font-size: 0.8rem; color: var(--text-muted); text-align: center;">QR Code hidden<br>(PQ URLs are too large)</span>';
+                    }
+                } catch (qrErr) {
+                    console.warn('QR Code generation failed:', qrErr);
+                }
 
                 btn.innerText = 'Done';
                 showToast('File encrypted and uploaded successfully!', 'success');
@@ -736,7 +813,25 @@ export const html = `<!DOCTYPE html>
                 progressText.innerText = '0%';
 
                 // 2. Decrypt
-                const key = await importKeyFromBase64(keyBase64);
+                let key;
+                if (keyBase64.startsWith('pq:')) {
+                    const ctBase64 = keyBase64.substring(3);
+                    const ct = new Uint8Array(base64ToArrayBuffer(ctBase64));
+                    const skBase64 = localStorage.getItem('pq_sk');
+                    if (!skBase64) {
+                        throw new Error("Missing Post-Quantum Private Key. This device cannot decrypt this file.");
+                    }
+                    const sk = new Uint8Array(base64ToArrayBuffer(skBase64));
+                    const kem = await loadMlKem();
+                    const ss = kem.decap(ct, sk);
+                    key = await crypto.subtle.importKey(
+                        "raw", ss,
+                        { name: "AES-GCM", length: 256 },
+                        true, ["encrypt", "decrypt"]
+                    );
+                } else {
+                    key = await importKeyFromBase64(keyBase64);
+                }
 
                 // Decrypt Metadata
                 const encryptedMetadataBase64 = res.headers.get('X-Encrypted-Metadata');

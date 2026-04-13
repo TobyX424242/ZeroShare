@@ -13,5 +13,9 @@
   "license": "ISC",
   "devDependencies": {
     "wrangler": "^3.0.0"
+  },
+  "dependencies": {
+    "mlkem": "^2.7.0",
+    "puppeteer": "^24.40.0"
   }
 }
